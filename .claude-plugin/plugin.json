@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "dandori",
+  "displayName": "dandori",
+  "version": "0.1.0",
+  "description": "SessionStart prints dori guide and in-flight items into context. Stop refuses to end a turn while a claim on this host has nothing logged since the claim. Needs dori on PATH and DORI_DIR set.",
+  "author": {
+    "name": "justyns"
+  },
+  "license": "MIT"
+}

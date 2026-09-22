@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# fzf-based interactive board over the dori CLI.
+#
+# Run from a ledger dir, or export DORI_DIR to point at one.
+#
+# Env:
+#   DORI_BIN    path to the dori binary (default: first `dori` on PATH)
+#   DORI_DIR    ledger data dir (default: cwd, same as dori itself)
+#   DORI_ACTOR  actor name for write bindings (default: $USER)
+set -u
+
+# fzf's execute()/reload() run in a sub-shell with a possibly different
+# PATH, so resolve dori to a path once here.
+D=$(command -v "${DORI_BIN:-dori}") || { echo "dori-fzf: dori not found; set DORI_BIN or put dori on PATH" >&2; exit 1; }
+
+if ! command -v fzf >/dev/null 2>&1; then
+    echo "dori-fzf: fzf not found on PATH" >&2
+    exit 1
+fi
+
+DIR="${DORI_DIR:-.}"
+ACTOR="${DORI_ACTOR:-$USER}"
+EDITOR_BIN="${EDITOR:-vi}"
+
+RELOAD_ALL="\"$D\" list"
+RELOAD_COLLAPSED="\"$D\" list | grep -v '^  '"
+RELOAD_INFLIGHT="\"$D\" list --status inflight | grep -v '^  '"
+
+HEADER=$'ctrl-n: new from query | ctrl-o: claim | ctrl-d: done | ctrl-e: edit | ctrl-l: log\nctrl-x: expand | ctrl-r: collapse | ctrl-i: inflight | ctrl-/: cycle preview'
+
+# Plain execute plus `|| sleep 2` keeps a dori error on screen. execute-silent hid it.
+# fzf quotes {q} and {1} itself. Quoting them again embeds the quote characters.
+# {r1} is the raw form, for a placeholder inside a larger string (ids are alnum-and-dash).
+EXEC_NEW="\"$D\" upsert --ref adhoc:\$(date +%s) --title {q} --source manual --actor \"$ACTOR\" || sleep 2"
+EXEC_CLAIM="\"$D\" claim {1} --actor \"$ACTOR\" || sleep 2"
+EXEC_DONE="\"$D\" update {1} --status done --actor \"$ACTOR\" || sleep 2"
+# dori has no edit subcommand, so ctrl-e opens the item file in $EDITOR.
+EXEC_EDIT="\"$EDITOR_BIN\" \"$DIR/items/{r1}.md\""
+EXEC_LOG="printf 'log for {r1}: '; read -r note; [ -n \"\$note\" ] && \"$D\" log \"\$note\" --ref {1} --actor \"$ACTOR\" || sleep 1"
+
+"$D" list | grep -v '^  ' | fzf \
+    --header "$HEADER" \
+    --header-first \
+    --layout=reverse \
+    --info=inline \
+    --preview "\"$D\" show {1}" \
+    --preview-window=down:50%,wrap \
+    --bind 'ctrl-/:change-preview-window(right,55%|hidden|down,50%)' \
+    --bind "ctrl-x:reload($RELOAD_ALL)" \
+    --bind "ctrl-r:reload($RELOAD_COLLAPSED)" \
+    --bind "ctrl-i:reload($RELOAD_INFLIGHT)" \
+    --bind "ctrl-n:execute($EXEC_NEW)+reload($RELOAD_COLLAPSED)" \
+    --bind "ctrl-o:execute($EXEC_CLAIM)+reload($RELOAD_COLLAPSED)" \
+    --bind "ctrl-d:execute($EXEC_DONE)+reload($RELOAD_COLLAPSED)" \
+    --bind "ctrl-e:execute($EXEC_EDIT)+reload($RELOAD_COLLAPSED)" \
+    --bind "ctrl-l:execute($EXEC_LOG)+reload($RELOAD_COLLAPSED)"

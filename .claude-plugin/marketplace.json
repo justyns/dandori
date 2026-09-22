@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "dandori",
+  "description": "Claude Code hooks for the dori work ledger",
+  "owner": {
+    "name": "justyns"
+  },
+  "plugins": [
+    {
+      "name": "dandori",
+      "description": "SessionStart prints dori guide and in-flight items into context. Stop refuses to end a turn while a claim on this host has nothing logged since the claim. Needs dori on PATH and DORI_DIR set.",
+      "source": "./",
+      "category": "development",
+      "keywords": [
+        "dandori",
+        "work-ledger",
+        "hooks"
+      ]
+    }
+  ]
+}
