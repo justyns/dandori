@@ -1,6 +1,6 @@
 [project]
 name = "dandori"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first work ledger for AI agents: markdown items + append-only JSONL journal in a git repo"
 readme = "README.md"
 requires-python = ">=3.11"
