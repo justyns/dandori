@@ -96,7 +96,9 @@ journal:
   on `update`, `claim`, and `release` journals one with the transition.
 - `show` prints an item with its journal lines and `guide` a brief for an
   agent new to the ledger. `doctor` reports duplicate refs, expired claims,
-  dangling deps, unregistered prefixes, and string-valued tags.
+  claimed-idea items, dangling deps, unregistered prefixes, and
+  string-valued tags. Expired claims and unregistered prefixes are
+  informational; any other finding makes it exit 1.
 
 ## Claims and sync
 

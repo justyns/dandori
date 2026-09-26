@@ -60,7 +60,7 @@ def test_doctor_detects_dangling_dep(ledger):
     assert result["clean"] is False
     dangling = [p for p in result["problems"] if p["check"] == "dangling_dep"]
     assert dangling == [{
-        "check": "dangling_dep", "item": item["id"], "dep": "needs:d-missing",
+        "check": "dangling_dep", "severity": "error", "item": item["id"], "dep": "needs:d-missing",
         "message": f"{item['id']} has needs:d-missing but d-missing does not exist",
     }]
 
@@ -83,3 +83,5 @@ def test_doctor_reports_expired_claim_as_informational(ledger):
     expired = [p for p in result["problems"] if p["check"] == "expired_claim"]
     assert len(expired) == 1
     assert expired[0]["item"] == item["id"]
+    assert expired[0]["severity"] == "info"
+    assert result["has_errors"] is False

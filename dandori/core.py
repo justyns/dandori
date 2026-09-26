@@ -311,6 +311,11 @@ def derive_project_from_cwd(cwd: Optional[Path] = None) -> Optional[str]:
     return Path(toplevel.stdout.strip()).name or None
 
 
+def _refuse_idea_if_claimed(item_id: str, fm: dict, status: Optional[str]) -> None:
+    if status == "idea" and fm.get("claimed_by"):
+        raise DandoriError(f"{item_id} is claimed by {fm['claimed_by']}; release it before setting status to idea")
+
+
 def _claim_expired(fm: dict) -> bool:
     claimed_at = fm.get("claimed_at")
     if not claimed_at:
@@ -389,7 +394,10 @@ def _eager_git_pull(data_dir: Path) -> Optional[str]:
         _abort_stale_rebase(data_dir)
         return "origin unreachable (timeout)"
     if pulled.returncode != 0:
+        conflicted = _git_output(["diff", "--name-only", "--diff-filter=U"], data_dir).stdout.split()
         _abort_stale_rebase(data_dir)
+        if conflicted:
+            return f"pull blocked by conflicts in {', '.join(conflicted)}; resolve with git in {data_dir}"
         return f"pull failed: {_short_git_error(pulled.stderr)}"
     return None
 
@@ -494,9 +502,12 @@ class Ledger:
         return matches
 
     def _resolve(self, id_or_ref: str) -> tuple[str, dict, str, Optional[str]]:
+        return self._pick_oldest(id_or_ref, self._resolve_all(id_or_ref))
+
+    @staticmethod
+    def _pick_oldest(id_or_ref: str, matches: list[tuple[str, dict, str]]) -> tuple[str, dict, str, Optional[str]]:
         """When a ref matches several items, returns the oldest by created
         plus a warning pointing at `dori doctor`."""
-        matches = self._resolve_all(id_or_ref)
         if not matches:
             raise ItemNotFoundError(f"no item found for '{id_or_ref}'")
         matches.sort(key=lambda m: m[1]["created"])
@@ -507,6 +518,30 @@ class Ledger:
                        f"using oldest {ids[0]}, run `dori doctor` to fix")
         item_id, fm, body = matches[0]
         return item_id, fm, body, warning
+
+    def _load_upsert_index(self) -> tuple[dict[str, tuple[dict, str]], dict[str, list[str]]]:
+        """Loads every item file once, for a whole upsert() call. items_by_id
+        maps item id -> (fm, body); ids_by_ref maps a ref to every item id
+        holding it (more than one only after an offline merge)."""
+        items_by_id: dict[str, tuple[dict, str]] = {}
+        ids_by_ref: dict[str, list[str]] = {}
+        if self.items_dir.exists():
+            for p in sorted(self.items_dir.glob("*.md")):
+                fm, body = parse_item_file(p)
+                items_by_id[fm["id"]] = (fm, body)
+                for r in fm.get("refs") or []:
+                    ids_by_ref.setdefault(r, []).append(fm["id"])
+        return items_by_id, ids_by_ref
+
+    def _resolve_from_index(
+        self, id_or_ref: str,
+        items_by_id: dict[str, tuple[dict, str]], ids_by_ref: dict[str, list[str]],
+    ) -> tuple[str, dict, str, Optional[str]]:
+        if "/" not in id_or_ref and id_or_ref in items_by_id:
+            ids = [id_or_ref]
+        else:
+            ids = ids_by_ref.get(id_or_ref) or []
+        return self._pick_oldest(id_or_ref, [(iid, *items_by_id[iid]) for iid in ids])
 
     def _write_item(self, item_id: str, fm: dict, body: str) -> None:
         fm["updated"] = now_iso()
@@ -545,13 +580,21 @@ class Ledger:
             self.items_dir.mkdir(parents=True, exist_ok=True)
             self._journal_append("ingest", f"ingest from {source}: {len(payload)} items",
                                  actor=actor, source=source)
+            items_by_id, ids_by_ref = self._load_upsert_index()
             for item_data in payload:
-                results.append(self._upsert_one(item_data, source=source, actor=actor, force=force))
+                results.append(self._upsert_one(
+                    item_data, source=source, actor=actor, force=force,
+                    items_by_id=items_by_id, ids_by_ref=ids_by_ref,
+                ))
         if sync:
             self.sync()
         return results if batch else results[0]
 
-    def _upsert_one(self, data: dict, *, source: str, actor: Optional[str], force: bool = False) -> dict:
+    def _upsert_one(
+        self, data: dict, *, source: str, actor: Optional[str],
+        items_by_id: dict[str, tuple[dict, str]], ids_by_ref: dict[str, list[str]],
+        force: bool = False,
+    ) -> dict:
         data = dict(data)
         validate_status(data.get("status"))
         for key in ("tags", "deps"):
@@ -574,7 +617,7 @@ class Ledger:
         ref_warning = None
         for r in refs:
             try:
-                iid, fm, body, warning = self._resolve(r)
+                iid, fm, body, warning = self._resolve_from_index(r, items_by_id, ids_by_ref)
             except ItemNotFoundError:
                 continue
             if target is None:
@@ -585,6 +628,7 @@ class Ledger:
 
         if target:
             item_id, fm, body = target
+            _refuse_idea_if_claimed(item_id, fm, data.get("status"))
             before, before_body = dict(fm), body
             new_refs = [r for r in refs if r != item_id]
             fm["refs"] = list(dict.fromkeys((fm.get("refs") or []) + new_refs))
@@ -616,6 +660,11 @@ class Ledger:
 
             if any(before.get(k) != v for k, v in fm.items()) or body != before_body:
                 self._write_item(item_id, fm, body)
+            items_by_id[item_id] = (fm, body)
+            for r in new_refs:
+                ids = ids_by_ref.setdefault(r, [])
+                if item_id not in ids:
+                    ids.append(item_id)
             self._journal_status(item_id, before.get("status"), fm["status"], actor)
             return _notes(canonical_frontmatter(fm), ref_warning=ref_warning, source_note=source_note)
 
@@ -643,6 +692,9 @@ class Ledger:
         }
         body = render_body(data.get("description"))
         self._write_item(item_id, fm, body)
+        items_by_id[item_id] = (fm, body)
+        for r in fm["refs"]:
+            ids_by_ref.setdefault(r, []).append(item_id)
         self._journal_append("create", f"created: {fm['title']}", ref=item_id, actor=actor)
         return canonical_frontmatter(fm)
 
@@ -651,6 +703,7 @@ class Ledger:
         validate_status(fields.get("status"))
         with self._lock():
             item_id, fm, body, ref_warning = self._resolve(id_or_ref)
+            _refuse_idea_if_claimed(item_id, fm, fields.get("status"))
             before = dict(fm)
             for key, value in fields.items():
                 if value is None:
@@ -792,11 +845,13 @@ class Ledger:
             child_source = source or parent_fm.get("source") or "split"
             deps = list(parent_fm.get("deps") or [])
             children = []
+            items_by_id, ids_by_ref = self._load_upsert_index()
             for title in titles:
                 child = self._upsert_one(
                     {"title": title, "project": parent_fm.get("project"),
                      "deps": [f"part-of:{parent_id}"]},
                     source=child_source, actor=actor,
+                    items_by_id=items_by_id, ids_by_ref=ids_by_ref,
                 )
                 children.append(child)
                 deps.append(f"needs:{child['id']}")
@@ -852,6 +907,7 @@ class Ledger:
                     if p and p not in prefixes:
                         problems.append({
                             "check": "unregistered_prefix",
+                            "severity": "info",
                             "item": it["id"],
                             "kind": kind,
                             "value": value,
@@ -866,6 +922,7 @@ class Ledger:
             if len(ids) > 1:
                 problems.append({
                     "check": "duplicate_ref",
+                    "severity": "error",
                     "ref": ref,
                     "items": sorted(ids),
                     "message": f"ref {ref!r} is held by multiple items: {', '.join(sorted(ids))}",
@@ -875,8 +932,19 @@ class Ledger:
             if it.get("claimed_by") and it.get("claim_expired"):
                 problems.append({
                     "check": "expired_claim",
+                    "severity": "info",
                     "item": it["id"],
-                    "message": f"informational: {it['id']} claimed by {it['claimed_by']} but claim expired",
+                    "message": f"{it['id']} claimed by {it['claimed_by']} but claim expired",
+                })
+
+        for it in all_items:
+            if it.get("status") == "idea" and it.get("claimed_by"):
+                problems.append({
+                    "check": "claimed_idea",
+                    "severity": "error",
+                    "item": it["id"],
+                    "message": f"{it['id']} is status idea but claimed by {it['claimed_by']}; "
+                               "release it or graduate it to ready",
                 })
 
         for it in all_items:
@@ -887,6 +955,7 @@ class Ledger:
                 if dtype in ("part-of", "needs") and target not in id_set:
                     problems.append({
                         "check": "dangling_dep",
+                        "severity": "error",
                         "item": it["id"],
                         "dep": dep,
                         "message": f"{it['id']} has {dtype}:{target} but {target} does not exist",
@@ -896,12 +965,17 @@ class Ledger:
             if isinstance(it.get("tags"), str):
                 problems.append({
                     "check": "string_tags",
+                    "severity": "error",
                     "item": it["id"],
                     "message": f"{it['id']} tags is a string, not a list ({it['tags']!r}); "
                                f"re-tag with `dori update {it['id']} --tags ...`",
                 })
 
-        return {"problems": problems, "clean": not problems}
+        return {
+            "problems": problems,
+            "clean": not problems,
+            "has_errors": any(p["severity"] == "error" for p in problems),
+        }
 
     def prefix_add(self, name: str, kind: str, desc: Optional[str] = None,
                     *, actor: Optional[str] = None) -> dict:

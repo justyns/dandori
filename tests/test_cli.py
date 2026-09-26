@@ -72,7 +72,7 @@ def test_doctor_command_exit_codes(tmp_path, capsys):
 
     assert cli.main(["doctor", "--dir", data_dir, "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["data"] == {"problems": [], "clean": True}
+    assert payload["data"] == {"problems": [], "clean": True, "has_errors": False}
 
     ledger = Ledger(data_dir)
     dup_id = ledger.upsert({"ref": "vikunja:2", "title": "U"}, source="s", actor="alice")["id"]
@@ -82,6 +82,26 @@ def test_doctor_command_exit_codes(tmp_path, capsys):
     path.write_text(render_item_file(fm, body), encoding="utf-8")
 
     assert cli.main(["doctor", "--dir", data_dir]) == 1
+
+
+def test_doctor_command_exits_0_for_informational_only_findings(tmp_path, capsys):
+    data_dir = str(tmp_path / "data")
+    cli.main(["init", "--dir", data_dir])
+    ledger = Ledger(data_dir)
+    item = ledger.upsert({"ref": "vikunja:1", "title": "T"}, source="s", actor="alice")
+    ledger.claim(item["id"], "alice")
+    path = ledger.items_dir / f"{item['id']}.md"
+    fm, body = parse_item_file(path)
+    fm["claimed_at"] = "2020-01-01T00:00:00Z"
+    path.write_text(render_item_file(fm, body), encoding="utf-8")
+    capsys.readouterr()
+
+    rc = cli.main(["doctor", "--dir", data_dir, "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data"]["problems"]
+    assert payload["data"]["clean"] is False
+    assert payload["data"]["has_errors"] is False
+    assert rc == 0
 
 
 def test_split_command(tmp_path, capsys):

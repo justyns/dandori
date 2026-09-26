@@ -141,8 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("guide", help="how to use this ledger, from its current state", parents=[common])
 
-    sub.add_parser("doctor", help="scan for duplicate refs, expired claims, dangling deps, unregistered prefixes, and string-valued tags",
-                    parents=[common])
+    sub.add_parser(
+        "doctor",
+        help="scan for ledger problems; exits 1 only on error-severity findings, 0 for informational ones",
+        parents=[common],
+    )
 
     p = sub.add_parser("prefix", help="manage the ref/link prefix registry")
     prefix_sub = p.add_subparsers(dest="prefix_action", required=True)
@@ -402,9 +405,9 @@ def cmd_guide(ledger, args) -> int:
 def cmd_doctor(ledger, args) -> int:
     result = ledger.doctor()
     problems = result["problems"]
-    lines = [f"[{p['check']}] {p['message']}" for p in problems] or ["ok: no problems found"]
+    lines = [f"[{p['severity']}:{p['check']}] {p['message']}" for p in problems] or ["ok: no problems found"]
     _print(args, result, lines)
-    return 0 if result["clean"] else 1
+    return 1 if result["has_errors"] else 0
 
 
 def cmd_prefix(ledger, args) -> int:

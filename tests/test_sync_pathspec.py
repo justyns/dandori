@@ -95,3 +95,29 @@ def test_eager_claim_excludes_a_humans_staged_file_from_the_commit(tmp_path):
     assert "src.py" not in log
     status = _git(["status", "--porcelain"], cwd=data_dir).stdout.splitlines()
     assert "A  src.py" in status
+
+
+def test_eager_claim_names_conflicting_paths(tmp_path):
+    bare = tmp_path / "origin.git"
+    _git(["init", "--bare", str(bare)], cwd=tmp_path)
+
+    a_dir = tmp_path / "a"
+    a = Ledger.init(a_dir)
+    item = a.upsert({"ref": "vikunja:1", "title": "original"}, source="s", actor="alice")
+    _git(["init"], cwd=a_dir)
+    _git(["remote", "add", "origin", str(bare)], cwd=a_dir)
+    a.sync()
+
+    b_dir = tmp_path / "b"
+    _git(["clone", str(bare), str(b_dir)], cwd=tmp_path)
+    b = Ledger(b_dir)
+    b.upsert({"ref": "vikunja:1", "title": "changed by bob"}, source="s", actor="bob")
+    b.sync()
+
+    a.upsert({"ref": "vikunja:1", "title": "changed by alice"}, source="s", actor="alice")
+
+    result = a.claim(item["id"], "alice")
+    assert result["claimed_by"] == "alice"
+    assert "sync_warning" in result
+    assert f"items/{item['id']}.md" in result["sync_warning"]
+    assert "conflict" in result["sync_warning"]
