@@ -2,7 +2,7 @@ import subprocess
 
 import pytest
 
-from dandori.core import DandoriError, Ledger
+from dandori.core import DandoriError, Ledger, save_machine_host_id
 
 
 def _git(args, cwd):
@@ -38,10 +38,20 @@ def test_sync_second_run_pulls_and_pushes(tmp_path):
     _git(["remote", "add", "origin", str(bare)], cwd=data_dir)
     ledger.sync()
 
+    clone = tmp_path / "clone"
+    _git(["clone", str(bare), str(clone)], cwd=tmp_path)
+    save_machine_host_id("otherhost")
+    other = Ledger(clone)
+    other.upsert({"ref": "vikunja:3", "title": "C"}, source="s", actor="bob")
+    other.upsert({"ref": "vikunja:4", "title": "D"}, source="s", actor="bob")
+    other.sync()
+    save_machine_host_id("testhost")
+
     ledger.upsert({"ref": "vikunja:2", "title": "B"}, source="s", actor="alice")
     result = ledger.sync()
     assert result["pushed"] is True
-    assert result["message"] == "synced with origin"
+    assert (result["pulled_items"], result["pushed_items"]) == (2, 1)
+    assert result["message"] == "synced with origin: pulled 2 items, pushed 1 item"
 
 
 def test_sync_conflict_aborts_the_rebase_and_reports_the_file(tmp_path):

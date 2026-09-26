@@ -50,7 +50,7 @@ $ dori release d-e43b31 --actor laptop-cc
 released d-e43b31
 
 $ dori sync
-synced with origin
+synced with origin: pulled 0 items, pushed 0 items
 
 $ dori show d-e43b31
 d-e43b31  Mobile chat density (bug, p2)  [tsugite]

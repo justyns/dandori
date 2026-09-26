@@ -316,6 +316,10 @@ def _refuse_idea_if_claimed(item_id: str, fm: dict, status: Optional[str]) -> No
         raise DandoriError(f"{item_id} is claimed by {fm['claimed_by']}; release it before setting status to idea")
 
 
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
 def _claim_expired(fm: dict) -> bool:
     claimed_at = fm.get("claimed_at")
     if not claimed_at:
@@ -1027,10 +1031,15 @@ class Ledger:
             if "origin" not in git("remote").stdout.split():
                 msg = "committed locally; no origin remote configured" if committed else "no changes; no origin remote configured"
                 return {"committed": committed, "pushed": False, "message": msg}
+            branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
             if not git("ls-remote", "--heads", "origin").stdout.strip():
-                branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
                 git("push", "-u", "origin", branch)
                 return {"committed": committed, "pushed": True, "message": "pushed initial commit to empty origin"}
+
+            def changed_items(*revs: str) -> int:
+                return len(git("diff", "--name-only", *revs, "--", "items").stdout.split())
+
+            head = git("rev-parse", "HEAD").stdout.strip()
             pulled = _pull_rebase(self.data_dir)
             if pulled.returncode != 0:
                 conflicted = git("diff", "--name-only", "--diff-filter=U").stdout.split()
@@ -1041,8 +1050,15 @@ class Ledger:
                     f"sync: conflicts in {', '.join(conflicted)}; resolve with git in "
                     f"{self.data_dir}, then rerun `dori sync`"
                 )
+            pulled_items = changed_items(f"{head}...origin/{branch}")
+            pushed_items = changed_items(f"origin/{branch}", "HEAD")
             git("push")
-            return {"committed": committed, "pushed": True, "message": "synced with origin"}
+            return {
+                "committed": committed, "pushed": True,
+                "pulled_items": pulled_items, "pushed_items": pushed_items,
+                "message": f"synced with origin: pulled {_count(pulled_items, 'item')}, "
+                           f"pushed {_count(pushed_items, 'item')}",
+            }
         except subprocess.CalledProcessError as e:
             stderr = (e.stderr or "").strip()
             raise DandoriError(f"sync: {stderr or e}") from e
