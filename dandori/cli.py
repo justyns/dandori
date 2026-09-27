@@ -11,6 +11,7 @@ from dandori.core import (
     STATUSES,
     DandoriError,
     Ledger,
+    derive_project_from_cwd,
     host_config_path,
     humanize_age,
     machine_host_id,
@@ -19,6 +20,16 @@ from dandori.core import (
 )
 
 SCHEMA_VERSION = 1
+PROJECT_FILTER_HELP = "filter to this project, or . for the cwd's git repo"
+
+
+def _project_filter(project: Optional[str]) -> Optional[str]:
+    if project != ".":
+        return project
+    derived = derive_project_from_cwd()
+    if not derived:
+        raise DandoriError(f"--project . needs a git repo, and {os.getcwd()} is not in one")
+    return derived
 
 
 def _csv(value):
@@ -124,14 +135,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("list", help="list items", parents=[common])
     p.add_argument("--status", choices=STATUSES)
-    p.add_argument("--project")
+    p.add_argument("-p", "--project", help=PROJECT_FILTER_HELP)
 
     p = sub.add_parser("show", help="show an item plus its journal lines", parents=[common])
     p.add_argument("id_or_ref")
 
     p = sub.add_parser("status", help="overdue / in flight / ready / waiting overview",
                        parents=[common])
-    p.add_argument("--project")
+    p.add_argument("-p", "--project", help=PROJECT_FILTER_HELP)
 
     p = sub.add_parser("split", help="split a parent into child items (part-of + needs: deps)", parents=[common])
     p.add_argument("parent_id_or_ref")
@@ -287,7 +298,7 @@ def cmd_release(ledger, args) -> int:
 
 
 def cmd_list(ledger, args) -> int:
-    items = ledger.items(status=args.status, project=args.project)
+    items = ledger.items(status=args.status, project=_project_filter(args.project))
     _print(args, items, _tree_lines(items) or ["(no items)"])
     return 0
 
@@ -324,7 +335,7 @@ def cmd_split(ledger, args) -> int:
 
 
 def cmd_status(ledger, args) -> int:
-    result = ledger.status(project=args.project)
+    result = ledger.status(project=_project_filter(args.project))
     lines = []
     sources = result["sources"]
     if sources:

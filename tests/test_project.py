@@ -1,5 +1,6 @@
 import subprocess
 
+from dandori import cli
 from dandori.core import derive_project_from_cwd
 
 
@@ -91,3 +92,24 @@ def test_list_and_status_filter_by_project(ledger):
 
     status = ledger.status(project="widgets")
     assert [i["title"] for i in status["ready"]] == ["A"]
+
+
+def test_list_project_dot_filters_to_the_cwd_repo(ledger, tmp_path, monkeypatch, capsys):
+    ledger.upsert({"ref": "vikunja:7", "title": "mine", "project": "repo"}, source="s", actor="alice")
+    ledger.upsert({"ref": "vikunja:8", "title": "other", "project": "widgets"}, source="s", actor="alice")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(["init"], cwd=repo)
+    _git(["remote", "add", "origin", "git@example.com:owner/repo.git"], cwd=repo)
+    monkeypatch.chdir(repo)
+    capsys.readouterr()
+
+    assert cli.main(["list", "--dir", str(ledger.data_dir), "-p", "."]) == 0
+    out = capsys.readouterr().out
+    assert "mine" in out and "other" not in out
+
+
+def test_project_dot_outside_a_git_repo_errors(ledger, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["status", "--dir", str(ledger.data_dir), "--project", "."]) == 1
+    assert str(tmp_path) in capsys.readouterr().err

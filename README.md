@@ -84,7 +84,7 @@ journal:
 - `project` is derived from the cwd's git remote on create. `--project X`
   sets it on `upsert` or `update`, `update --no-project` clears it, and
   `upsert --no-project` skips the derivation. `list` and `status` filter
-  with `--project`.
+  with `--project` (`-p`), and `-p .` uses the cwd's derived project.
 - `--status idea` marks a thought with no commitment. `status` leaves ideas
   out and `claim` refuses them. `--due YYYY-MM-DD` shows in `list` and
   `show` and feeds the OVERDUE section; `--due ""` clears it.
