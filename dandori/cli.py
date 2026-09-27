@@ -364,8 +364,8 @@ def _guide_lines(g: dict) -> list[str]:
     lines = [
         "dori guide - how to use this ledger",
         "",
-        "A shared work ledger: item files in items/, an append-only journal,",
-        "and git as the sync layer (dori sync).",
+        "A shared work ledger of item files in items/ and an append-only",
+        "journal, synced through git with dori sync.",
         "",
         "Core loop:",
         f'  dori upsert --ref forgejo:123 --title "..." --project {project} '
