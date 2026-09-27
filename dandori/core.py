@@ -491,22 +491,12 @@ class Ledger:
         entries.sort(key=lambda e: e["ts"])
         return entries
 
-    def _resolve_all(self, id_or_ref: str) -> list[tuple[str, dict, str]]:
-        """Items matching an id or a ref. More than one only when an offline
-        merge duplicated a ref across items."""
+    def _resolve(self, id_or_ref: str) -> tuple[str, dict, str, Optional[str]]:
         path = self.items_dir / f"{id_or_ref}.md"
         if "/" not in id_or_ref and path.exists():
             fm, body = parse_item_file(path)
-            return [(fm["id"], fm, body)]
-        matches = []
-        for p in sorted(self.items_dir.glob("*.md")):
-            fm, body = parse_item_file(p)
-            if id_or_ref in (fm.get("refs") or []):
-                matches.append((fm["id"], fm, body))
-        return matches
-
-    def _resolve(self, id_or_ref: str) -> tuple[str, dict, str, Optional[str]]:
-        return self._pick_oldest(id_or_ref, self._resolve_all(id_or_ref))
+            return fm["id"], fm, body, None
+        return self._resolve_from_index(id_or_ref, *self._load_index())
 
     @staticmethod
     def _pick_oldest(id_or_ref: str, matches: list[tuple[str, dict, str]]) -> tuple[str, dict, str, Optional[str]]:
@@ -523,18 +513,16 @@ class Ledger:
         item_id, fm, body = matches[0]
         return item_id, fm, body, warning
 
-    def _load_upsert_index(self) -> tuple[dict[str, tuple[dict, str]], dict[str, list[str]]]:
-        """Loads every item file once, for a whole upsert() call. items_by_id
-        maps item id -> (fm, body); ids_by_ref maps a ref to every item id
-        holding it (more than one only after an offline merge)."""
+    def _load_index(self) -> tuple[dict[str, tuple[dict, str]], dict[str, list[str]]]:
+        """items_by_id maps item id -> (fm, body); ids_by_ref maps a ref to
+        every item id holding it (more than one only after an offline merge)."""
         items_by_id: dict[str, tuple[dict, str]] = {}
         ids_by_ref: dict[str, list[str]] = {}
-        if self.items_dir.exists():
-            for p in sorted(self.items_dir.glob("*.md")):
-                fm, body = parse_item_file(p)
-                items_by_id[fm["id"]] = (fm, body)
-                for r in fm.get("refs") or []:
-                    ids_by_ref.setdefault(r, []).append(fm["id"])
+        for p in sorted(self.items_dir.glob("*.md")):
+            fm, body = parse_item_file(p)
+            items_by_id[fm["id"]] = (fm, body)
+            for r in fm.get("refs") or []:
+                ids_by_ref.setdefault(r, []).append(fm["id"])
         return items_by_id, ids_by_ref
 
     def _resolve_from_index(
@@ -584,7 +572,7 @@ class Ledger:
             self.items_dir.mkdir(parents=True, exist_ok=True)
             self._journal_append("ingest", f"ingest from {source}: {len(payload)} items",
                                  actor=actor, source=source)
-            items_by_id, ids_by_ref = self._load_upsert_index()
+            items_by_id, ids_by_ref = self._load_index()
             for item_data in payload:
                 results.append(self._upsert_one(
                     item_data, source=source, actor=actor, force=force,
@@ -852,7 +840,7 @@ class Ledger:
             child_source = source or parent_fm.get("source") or "split"
             deps = list(parent_fm.get("deps") or [])
             children = []
-            items_by_id, ids_by_ref = self._load_upsert_index()
+            items_by_id, ids_by_ref = self._load_index()
             for title in titles:
                 child = self._upsert_one(
                     {"title": title, "project": parent_fm.get("project"),
@@ -936,7 +924,7 @@ class Ledger:
                 })
 
         for it in all_items:
-            if it.get("claimed_by") and it.get("claim_expired"):
+            if it["claim_expired"]:
                 problems.append({
                     "check": "expired_claim",
                     "severity": "info",
