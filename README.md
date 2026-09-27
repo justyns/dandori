@@ -92,13 +92,15 @@ journal:
   `needs:` deps on the parent. Open `blocks:` or `needs:` deps derive
   `[blocked]`, never a stored status, and `list`/`status` nest children
   under their parent.
-- `dori log "msg" --ref <id> --actor A` appends a journal line; `--log MSG`
-  on `update`, `claim`, and `release` journals one with the transition.
+- `dori log "msg" --ref <id-or-ref> --actor A` appends a journal line
+  against the item; `--log MSG` on `update`, `claim`, and `release`
+  journals one with the transition.
 - `show` prints an item with its journal lines and `guide` a brief for an
   agent new to the ledger. `doctor` reports duplicate refs, expired claims,
-  claimed-idea items, dangling deps, unregistered prefixes, and
-  string-valued tags. Expired claims and unregistered prefixes are
-  informational; any other finding makes it exit 1.
+  claimed-idea items, dangling deps, unregistered prefixes, string-valued
+  tags, and log entries whose ref is not an item id. Expired claims,
+  unregistered prefixes, and orphaned log refs are informational; any
+  other finding makes it exit 1.
 
 ## Claims and sync
 

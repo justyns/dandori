@@ -729,11 +729,14 @@ class Ledger:
 
     def log(self, msg: str, *, ref: Optional[str] = None, actor: Optional[str] = None,
             sync: bool = False) -> dict:
+        ref_warning = None
         with self._lock():
+            if ref:
+                ref, _, _, ref_warning = self._resolve(ref)
             entry = self._journal_append("log", msg, ref=ref, actor=actor)
         if sync:
             self.sync()
-        return entry
+        return _notes(entry, ref_warning=ref_warning)
 
     def claim(self, id_or_ref: str, actor: Optional[str], log: Optional[str] = None,
               sync: Optional[bool] = None) -> dict:
@@ -973,6 +976,17 @@ class Ledger:
                     "item": it["id"],
                     "message": f"{it['id']} tags is a string, not a list ({it['tags']!r}); "
                                f"re-tag with `dori update {it['id']} --tags ...`",
+                })
+
+        for e in self._read_journal():
+            if e["kind"] == "log" and e.get("ref") and e["ref"] not in id_set:
+                problems.append({
+                    "check": "orphaned_log_ref",
+                    "severity": "info",
+                    "ref": e["ref"],
+                    "ts": e["ts"],
+                    "message": f"log entry at {e['ts']} has ref {e['ref']!r}, not an item id; "
+                               "`dori show` does not list it",
                 })
 
         return {
