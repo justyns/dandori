@@ -19,7 +19,7 @@ def main():
         return
     host = dori("host")["host_id"]
     unlogged = []
-    for it in dori("status")["inflight"]:
+    for it in dori("list", "--claimed"):
         if it.get("claim_expired"):
             continue
         events = dori("show", it["id"])["journal"]

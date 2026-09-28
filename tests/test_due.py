@@ -40,6 +40,6 @@ def test_status_ready_sorts_by_due_then_priority(ledger):
     ledger.upsert({"ref": "vikunja:3", "title": "due sooner", "due": "2026-01-01", "priority": 4}, source="s", actor="alice")
 
     result = ledger.status()
-    titles = [it["title"] for it in result["ready"]]
+    titles = [it["title"] for it in result["sections"]["ready"]]
     assert titles == ["due sooner", "due later", "no due, p1"]
 

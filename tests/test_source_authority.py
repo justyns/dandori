@@ -7,12 +7,12 @@ from dandori.core import DandoriError
 def test_non_matching_source_upsert_preserves_title(ledger):
     a = ledger.upsert({"ref": "vikunja:1", "title": "Hand-written title"}, source="alice", actor="alice")
     b = ledger.upsert(
-        {"ref": "vikunja:1", "title": "Vikunja retitle attempt", "status": "inflight"},
+        {"ref": "vikunja:1", "title": "Vikunja retitle attempt", "status": "waiting"},
         source="vikunja", actor="alice",
     )
     assert b["id"] == a["id"]
     assert b["title"] == "Hand-written title"
-    assert b["status"] == "inflight"
+    assert b["status"] == "waiting"
     assert b["source"] == "alice"
     assert "vikunja" in b["source_note"]
     assert "alice" in b["source_note"]
@@ -31,13 +31,13 @@ def test_non_matching_source_still_applies_other_fields(ledger):
     b = ledger.upsert(
         {
             "refs": ["vikunja:1", "jira:2"], "links": ["pr:forgejo:tsugite#900"],
-            "status": "inflight", "priority": 0, "tags": ["urgent"], "due": "2026-01-01",
+            "status": "waiting", "priority": 0, "tags": ["urgent"], "due": "2026-01-01",
         },
         source="vikunja", actor="alice",
     )
     assert "jira:2" in b["refs"]
     assert b["links"] == ["pr:forgejo:tsugite#900"]
-    assert b["status"] == "inflight"
+    assert b["status"] == "waiting"
     assert b["priority"] == 0
     assert b["tags"] == ["urgent"]
     assert b["due"] == "2026-01-01"

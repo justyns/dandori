@@ -15,7 +15,8 @@ def test_status_json_envelope(tmp_path, capsys):
     assert cli.main(["status", "--dir", data_dir, "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_version"] == 1
-    assert set(payload["data"].keys()) == {"sources", "overdue", "inflight", "ready", "waiting"}
+    assert set(payload["data"].keys()) == {"sources", "overdue", "sections"}
+    assert set(payload["data"]["sections"]) == {"in_flight", "ready", "waiting"}
 
 
 def test_claim_without_actor_fails_with_nonzero_exit(tmp_path, capsys):
@@ -140,7 +141,6 @@ def test_cli_claim_release_update_and_show_journal(tmp_path, capsys):
     assert "(task, p2)" in capsys.readouterr().out
     assert cli.main(["show", item_id, "--dir", data_dir]) == 0
     out = capsys.readouterr().out
-    assert "[status] status: inflight -> ready" in out
     assert "[status] status: ready -> done" in out
 
 

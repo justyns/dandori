@@ -7,5 +7,5 @@ set -u
 
 dori guide 2>/dev/null
 echo
-dori list --status inflight 2>/dev/null
+dori list --claimed 2>/dev/null
 exit 0

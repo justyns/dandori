@@ -91,7 +91,7 @@ def test_list_and_status_filter_by_project(ledger):
     assert [i["title"] for i in widgets] == ["A"]
 
     status = ledger.status(project="widgets")
-    assert [i["title"] for i in status["ready"]] == ["A"]
+    assert [i["title"] for i in status["sections"]["ready"]] == ["A"]
 
 
 def test_list_project_dot_filters_to_the_cwd_repo(ledger, tmp_path, monkeypatch, capsys):

@@ -49,8 +49,8 @@ def test_id_keyed_upsert_does_not_pollute_refs(ledger):
 
 def test_upsert_status_change_writes_journal(ledger):
     a = ledger.upsert({"ref": "vikunja:7", "title": "G", "status": "ready"}, source="s", actor="alice")
-    ledger.upsert({"ref": "vikunja:7", "status": "inflight"}, source="s", actor="alice")
+    ledger.upsert({"ref": "vikunja:7", "status": "waiting"}, source="s", actor="alice")
     journal = ledger._read_journal()
     status_events = [e for e in journal if e["kind"] == "status" and e["ref"] == a["id"]]
     assert len(status_events) == 1
-    assert "ready -> inflight" in status_events[0]["msg"]
+    assert "ready -> waiting" in status_events[0]["msg"]

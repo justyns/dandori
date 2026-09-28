@@ -1,7 +1,7 @@
 """dandori core: Ledger, the local-first work ledger for AI agents.
 
 Storage layout under a data dir:
-    config.yaml     - prefix registry and sync settings (host identity is
+    config.yaml     - prefix and status registries, sync settings (host identity is
                       machine-local, see machine_host_id)
     items/<id>.md   - one file per item, YAML frontmatter + markdown body
     journal/<host>-YYYY-MM.jsonl - append-only, one file per host per month
@@ -53,7 +53,17 @@ class LockTimeoutError(DandoriError):
     pass
 
 
-STATUSES = ("idea", "ready", "inflight", "waiting", "done", "parked")
+HIDDEN_SECTION = "hidden"
+CLAIMED_SECTION = "in_flight"
+STATUS_FLAGS = ("section", "stale_days", "terminal")
+
+DEFAULT_STATUSES = {
+    "idea": {"section": "hidden", "stale_days": None, "terminal": False},
+    "ready": {"section": "ready", "stale_days": None, "terminal": False},
+    "waiting": {"section": "waiting", "stale_days": None, "terminal": False},
+    "parked": {"section": "hidden", "stale_days": None, "terminal": False},
+    "done": {"section": "hidden", "stale_days": None, "terminal": True},
+}
 
 FIELD_ORDER = (
     "id",
@@ -126,9 +136,36 @@ def validate_due(value: Optional[str]) -> Optional[str]:
     return value
 
 
-def validate_status(status: Optional[str]) -> None:
-    if status is not None and status not in STATUSES:
-        raise DandoriError(f"invalid status {status!r}, must be one of {STATUSES}")
+def load_statuses(data_dir: Path) -> dict:
+    statuses = load_config(data_dir).get("statuses")
+    if not statuses:
+        raise DandoriError("config.yaml has no statuses map - copy the defaults from the README")
+    for name, flags in statuses.items():
+        missing = [f for f in STATUS_FLAGS if f not in (flags or {})]
+        if missing:
+            raise DandoriError(f"status {name!r} in config.yaml is missing {', '.join(missing)}")
+    return statuses
+
+
+def default_status(data_dir: Path) -> str:
+    value = load_config(data_dir).get("default_status")
+    if not value:
+        raise DandoriError("config.yaml has no default_status")
+    check_status_registered(data_dir, value)
+    return value
+
+
+def check_status_registered(data_dir: Path, status: Optional[str]) -> None:
+    if status is None:
+        return
+    if status == "blocked":
+        raise DandoriError("status 'blocked' is reserved for items derived as blocked from open deps")
+    statuses = load_statuses(data_dir)
+    if status not in statuses:
+        raise DandoriError(
+            f"status {status!r} is not registered; registered statuses: {', '.join(sorted(statuses))} - "
+            "add it to statuses in config.yaml"
+        )
 
 
 def _flock_acquire(fd: int) -> None:
@@ -277,7 +314,7 @@ def _normalize_list_field(value):
     return list(value)
 
 
-def _compute_blocked(fm: dict, status_by_id: dict[str, str]) -> tuple[bool, list[str]]:
+def _compute_blocked(fm: dict, status_by_id: dict[str, str], statuses: dict) -> tuple[bool, list[str]]:
     blockers = []
     for dep in fm.get("deps") or []:
         if ":" not in dep:
@@ -285,7 +322,8 @@ def _compute_blocked(fm: dict, status_by_id: dict[str, str]) -> tuple[bool, list
         dtype, target = dep.split(":", 1)
         if dtype not in ("blocks", "needs"):
             continue
-        if status_by_id.get(target, "done") != "done":
+        target_status = status_by_id.get(target)
+        if target_status is not None and not statuses.get(target_status, {}).get("terminal"):
             blockers.append(target)
     return (bool(blockers), blockers)
 
@@ -312,11 +350,6 @@ def derive_project_from_cwd(cwd: Optional[Path] = None) -> Optional[str]:
         if project:
             return project
     return Path(toplevel.stdout.strip()).name or None
-
-
-def _refuse_idea_if_claimed(item_id: str, fm: dict, status: Optional[str]) -> None:
-    if status == "idea" and fm.get("claimed_by"):
-        raise DandoriError(f"{item_id} is claimed by {fm['claimed_by']}; release it before setting status to idea")
 
 
 def _count(n: int, noun: str) -> str:
@@ -454,7 +487,11 @@ class Ledger:
             ledger.items_dir.mkdir(parents=True, exist_ok=True)
             ledger.journal_dir.mkdir(parents=True, exist_ok=True)
             if not (ledger.data_dir / "config.yaml").exists():
-                save_config(ledger.data_dir, {"prefixes": DEFAULT_PREFIXES})
+                save_config(ledger.data_dir, {
+                    "prefixes": DEFAULT_PREFIXES,
+                    "statuses": DEFAULT_STATUSES,
+                    "default_status": "ready",
+                })
             gitignore = ledger.data_dir / ".gitignore"
             if not gitignore.exists():
                 gitignore.write_text(".lock\n", encoding="utf-8")
@@ -591,7 +628,7 @@ class Ledger:
         force: bool = False,
     ) -> dict:
         data = dict(data)
-        validate_status(data.get("status"))
+        check_status_registered(self.data_dir, data.get("status"))
         for key in ("tags", "deps"):
             if key in data:
                 data[key] = _normalize_list_field(data[key])
@@ -623,7 +660,6 @@ class Ledger:
 
         if target:
             item_id, fm, body = target
-            _refuse_idea_if_claimed(item_id, fm, data.get("status"))
             before, before_body = dict(fm), body
             new_refs = [r for r in refs if r != item_id]
             fm["refs"] = list(dict.fromkeys((fm.get("refs") or []) + new_refs))
@@ -673,7 +709,7 @@ class Ledger:
             "id": item_id,
             "title": title,
             "project": project,
-            "status": data.get("status") or "ready",
+            "status": data.get("status") or default_status(self.data_dir),
             "type": data.get("type") or "task",
             "priority": data.get("priority") if data.get("priority") is not None else 2,
             "due": validate_due(data.get("due")),
@@ -695,10 +731,9 @@ class Ledger:
 
     def update(self, id_or_ref: str, *, actor: Optional[str] = None, log: Optional[str] = None,
                sync: bool = False, **fields) -> dict:
-        validate_status(fields.get("status"))
+        check_status_registered(self.data_dir, fields.get("status"))
         with self._lock():
             item_id, fm, body, ref_warning = self._resolve(id_or_ref)
-            _refuse_idea_if_claimed(item_id, fm, fields.get("status"))
             before = dict(fm)
             for key, value in fields.items():
                 if value is None:
@@ -739,20 +774,14 @@ class Ledger:
                 base = _git_output(["rev-parse", "HEAD"], self.data_dir).stdout.strip()
 
             item_id, fm, body, ref_warning = self._resolve(id_or_ref)
-            if fm.get("status") == "idea":
-                raise DandoriError(f"{item_id} is an idea; graduate it to ready first")
             current = fm.get("claimed_by")
             if current and current != actor and not _claim_expired(fm):
                 raise ClaimConflictError(f"already claimed by {current}")
-            before_status = fm.get("status")
             fm["claimed_by"] = actor
             fm["claimed_at"] = now_iso()
-            if before_status == "ready":
-                fm["status"] = "inflight"
             self._write_item(item_id, fm, body)
             verb = "re-claimed" if current == actor else "claimed"
             self._journal_append("claim", f"{verb} by {actor}", ref=item_id, actor=actor)
-            self._journal_status(item_id, before_status, fm["status"], actor)
             if log:
                 self._journal_append("log", log, ref=item_id, actor=actor)
 
@@ -780,15 +809,11 @@ class Ledger:
             if current and current != actor and not _claim_expired(fm):
                 raise ClaimConflictError(f"claimed by {current}, not {actor}")
             had_claim = bool(current)
-            before_status = fm.get("status")
             fm.pop("claimed_by", None)
             fm.pop("claimed_at", None)
-            if had_claim and before_status == "inflight":
-                fm["status"] = "ready"
             self._write_item(item_id, fm, body)
             msg = f"released by {actor}" if had_claim else f"release no-op by {actor}"
             self._journal_append("release", msg, ref=item_id, actor=actor)
-            self._journal_status(item_id, before_status, fm["status"], actor)
             if log:
                 self._journal_append("log", log, ref=item_id, actor=actor)
 
@@ -801,7 +826,10 @@ class Ledger:
 
             return _notes(canonical_frontmatter(fm), sync_warning=warning, ref_warning=ref_warning)
 
-    def items(self, *, status: Optional[str] = None, project: Optional[str] = None) -> list[dict]:
+    def items(self, *, status: Optional[str] = None, project: Optional[str] = None,
+              claimed: bool = False) -> list[dict]:
+        statuses = load_statuses(self.data_dir)
+        check_status_registered(self.data_dir, status)
         all_items = [parse_item_file(p)[0] for p in sorted(self.items_dir.glob("*.md"))]
         status_by_id = {it["id"]: it["status"] for it in all_items}
         children_by_parent: dict[str, list[str]] = {}
@@ -815,13 +843,17 @@ class Ledger:
                 continue
             if project and fm.get("project") != project:
                 continue
+            if claimed and not fm.get("claimed_by"):
+                continue
             children_ids = children_by_parent.get(fm["id"])
             fm = canonical_frontmatter(fm)
-            fm["blocked"], fm["blocked_by"] = _compute_blocked(fm, status_by_id)
+            fm["blocked"], fm["blocked_by"] = _compute_blocked(fm, status_by_id, statuses)
             fm["claim_expired"] = _claim_expired(fm) if fm.get("claimed_by") else False
             if children_ids:
                 fm["children"] = children_ids
-                fm["children_done"] = sum(1 for c in children_ids if status_by_id.get(c) == "done")
+                fm["children_done"] = sum(
+                    1 for c in children_ids if statuses.get(status_by_id.get(c), {}).get("terminal")
+                )
             results.append(fm)
         return results
 
@@ -864,38 +896,73 @@ class Ledger:
                           ref_warning=ref_warning)
 
     def status(self, project: Optional[str] = None) -> dict:
+        statuses = load_statuses(self.data_dir)
         all_items = self.items(project=project)
         by_id = {it["id"]: it for it in all_items}
-        buckets: dict[str, list[dict]] = {"inflight": [], "ready": [], "waiting": []}
         today = datetime.now(timezone.utc).date().isoformat()
-        overdue = []
 
-        nested_ids = {c for it in all_items if it["status"] in buckets for c in it.get("children", [])}
+        def section_of(it: dict) -> str:
+            flags = statuses.get(it["status"], {})
+            if it.get("claimed_by") and not flags.get("terminal"):
+                return CLAIMED_SECTION
+            return flags.get("section", HIDDEN_SECTION)
+
+        sections: dict[str, list[dict]] = {CLAIMED_SECTION: []}
+        for flags in statuses.values():
+            if flags["section"] != HIDDEN_SECTION:
+                sections.setdefault(flags["section"], [])
+
+        overdue = []
+        nested_ids = {c for it in all_items if section_of(it) in sections for c in (it.get("children") or [])}
         for it in all_items:
-            if it["status"] in buckets and it["id"] not in nested_ids:
+            section = section_of(it)
+            if section in sections and it["id"] not in nested_ids:
                 if it.get("children"):
                     it = {**it, "nested_children": [by_id[c] for c in it["children"] if c in by_id]}
-                buckets[it["status"]].append(it)
-            if it.get("due") and it["due"] < today and it["status"] not in ("done", "parked", "idea"):
+                sections[section].append(it)
+            terminal = statuses.get(it["status"], {}).get("terminal")
+            if it.get("due") and it["due"] < today and section != HIDDEN_SECTION and not terminal:
                 overdue.append(it)
         overdue.sort(key=lambda it: it["due"])
-        buckets["ready"].sort(key=lambda it: (it.get("due") is None, it.get("due") or "", it.get("priority", 2)))
+        for bucket in sections.values():
+            bucket.sort(key=lambda it: (it.get("due") is None, it.get("due") or "", it.get("priority", 2)))
+
         sources = {}
         for e in self._read_journal():
             if e["kind"] == "ingest":
                 sources[e["source"]] = {"last_seen": e["ts"], "actor": e.get("actor")}
-        return {
-            "sources": dict(sorted(sources.items())),
-            "overdue": overdue,
-            "inflight": buckets["inflight"],
-            "ready": buckets["ready"],
-            "waiting": buckets["waiting"],
-        }
+        return {"sources": dict(sorted(sources.items())), "overdue": overdue, "sections": sections}
 
     def doctor(self) -> dict:
         all_items = self.items()
         id_set = {it["id"] for it in all_items}
+        statuses = load_statuses(self.data_dir)
         problems = []
+
+        for it in all_items:
+            if it["status"] not in statuses:
+                problems.append({
+                    "check": "unregistered_status",
+                    "severity": "info",
+                    "item": it["id"],
+                    "value": it["status"],
+                    "message": f"{it['id']} has status {it['status']!r}, not in config.yaml's statuses",
+                })
+
+        now = datetime.now(timezone.utc)
+        for it in all_items:
+            stale_days = statuses.get(it["status"], {}).get("stale_days")
+            if stale_days is None:
+                continue
+            age_days = (now - parse_iso(it["updated"])).total_seconds() / 86400
+            if age_days > stale_days:
+                problems.append({
+                    "check": "stale_item",
+                    "severity": "info",
+                    "item": it["id"],
+                    "message": f"{it['id']} not updated in over {_count(stale_days, 'day')} "
+                               f"(status {it['status']!r})",
+                })
 
         prefixes = load_prefixes(self.data_dir)
         for it in all_items:
@@ -933,16 +1000,6 @@ class Ledger:
                     "severity": "info",
                     "item": it["id"],
                     "message": f"{it['id']} claimed by {it['claimed_by']} but claim expired",
-                })
-
-        for it in all_items:
-            if it.get("status") == "idea" and it.get("claimed_by"):
-                problems.append({
-                    "check": "claimed_idea",
-                    "severity": "error",
-                    "item": it["id"],
-                    "message": f"{it['id']} is status idea but claimed by {it['claimed_by']}; "
-                               "release it or graduate it to ready",
                 })
 
         for it in all_items:
@@ -1016,6 +1073,8 @@ class Ledger:
         return {
             "host_id": self.host_id,
             "prefixes": self.prefix_list(),
+            "statuses": [{"name": name, **flags} for name, flags in load_statuses(self.data_dir).items()],
+            "default_status": load_config(self.data_dir).get("default_status"),
             "projects": sorted({it["project"] for it in all_items if it.get("project")}),
             "tags": sorted({t for it in all_items for t in (it.get("tags") or [])}),
             "example_actor": example_actor,

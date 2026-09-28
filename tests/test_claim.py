@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from dandori import cli
 from dandori.core import (
     ActorRequiredError,
     ClaimConflictError,
@@ -56,37 +57,28 @@ def test_release_clears_claim_fields(ledger):
     assert "claimed_at" not in result
 
 
-def test_claim_transitions_ready_item_to_inflight(ledger):
+def test_claim_does_not_change_status(ledger):
     item = _make_item(ledger)
     assert item["status"] == "ready"
     result = ledger.claim(item["id"], "alice")
-    assert result["status"] == "inflight"
+    assert result["status"] == "ready"
     journal = ledger._read_journal()
     status_events = [e for e in journal if e["kind"] == "status" and e["ref"] == item["id"]]
-    assert len(status_events) == 1
-    assert "ready -> inflight" in status_events[0]["msg"]
+    assert status_events == []
 
 
-def test_claim_on_waiting_item_does_not_change_status(ledger):
-    item = _make_item(ledger, ref="jira:waiting")
-    ledger.update(item["id"], status="waiting")
-    result = ledger.claim(item["id"], "alice")
-    assert result["status"] == "waiting"
-    journal = ledger._read_journal()
-    status_events = [e for e in journal if e["kind"] == "status" and e["ref"] == item["id"]]
-    assert len(status_events) == 1
-    assert "ready -> waiting" in status_events[0]["msg"]
-
-
-def test_release_reverts_inflight_item_to_ready(ledger):
+def test_release_leaves_status_alone_and_resumes_its_section(ledger):
     item = _make_item(ledger)
     ledger.claim(item["id"], "alice")
     result = ledger.release(item["id"], "alice")
     assert result["status"] == "ready"
     journal = ledger._read_journal()
     status_events = [e for e in journal if e["kind"] == "status" and e["ref"] == item["id"]]
-    assert len(status_events) == 2
-    assert "inflight -> ready" in status_events[1]["msg"]
+    assert status_events == []
+
+    sections = ledger.status()["sections"]
+    assert "t" in [it["title"] for it in sections["ready"]]
+    assert "t" not in [it["title"] for it in sections["in_flight"]]
 
 
 def test_release_after_done_leaves_done_alone(ledger):
@@ -99,9 +91,9 @@ def test_release_after_done_leaves_done_alone(ledger):
 
 def test_release_noop_does_not_touch_status(ledger):
     item = _make_item(ledger)
-    ledger.update(item["id"], status="inflight")
+    ledger.update(item["id"], status="waiting")
     result = ledger.release(item["id"], "alice")
-    assert result["status"] == "inflight"
+    assert result["status"] == "waiting"
 
 
 def test_expired_claim_can_be_taken_by_another_actor(ledger):
@@ -114,3 +106,14 @@ def test_expired_claim_can_be_taken_by_another_actor(ledger):
 
     result = ledger.claim(item["id"], "other")
     assert result["claimed_by"] == "other"
+
+
+def test_list_claimed_shows_only_claimed_items(ledger, capsys):
+    claimed = _make_item(ledger, ref="jira:c1")
+    _make_item(ledger, ref="jira:c2")
+    ledger.claim(claimed["id"], "alice")
+
+    assert [it["id"] for it in ledger.items(claimed=True)] == [claimed["id"]]
+    assert cli.main(["list", "--claimed", "--dir", str(ledger.data_dir)]) == 0
+    assert capsys.readouterr().out.count("\n") == 1
+

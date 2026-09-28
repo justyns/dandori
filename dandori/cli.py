@@ -8,7 +8,6 @@ from typing import Optional
 
 from dandori.core import (
     PREFIX_KINDS,
-    STATUSES,
     DandoriError,
     Ledger,
     derive_project_from_cwd,
@@ -84,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title")
     p.add_argument("--project", help="freeform project name (default: derived from cwd's git remote on create)")
     p.add_argument("--no-project", action="store_true", help="suppress project auto-derivation on create")
-    p.add_argument("--status", choices=STATUSES)
+    p.add_argument("--status")
     p.add_argument("--type")
     p.add_argument("--priority", type=int)
     p.add_argument("--due", help="YYYY-MM-DD, or '' to clear")
@@ -107,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("update", help="change fields on an existing item", parents=[common])
     p.add_argument("id_or_ref")
-    p.add_argument("--status", choices=STATUSES)
+    p.add_argument("--status")
     p.add_argument("--title")
     p.add_argument("--type")
     p.add_argument("--priority", type=int)
@@ -134,14 +133,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_sync_flags(p, eager=True)
 
     p = sub.add_parser("list", help="list items", parents=[common])
-    p.add_argument("--status", choices=STATUSES)
+    p.add_argument("--status")
     p.add_argument("-p", "--project", help=PROJECT_FILTER_HELP)
+    p.add_argument("--claimed", action="store_true", help="only claimed items")
 
     p = sub.add_parser("show", help="show an item plus its journal lines", parents=[common])
     p.add_argument("id_or_ref")
 
-    p = sub.add_parser("status", help="overdue / in flight / ready / waiting overview",
-                       parents=[common])
+    p = sub.add_parser("status", help="overdue items and each status section", parents=[common])
     p.add_argument("-p", "--project", help=PROJECT_FILTER_HELP)
 
     p = sub.add_parser("split", help="split a parent into child items (part-of + needs: deps)", parents=[common])
@@ -298,7 +297,7 @@ def cmd_release(ledger, args) -> int:
 
 
 def cmd_list(ledger, args) -> int:
-    items = ledger.items(status=args.status, project=_project_filter(args.project))
+    items = ledger.items(status=args.status, project=_project_filter(args.project), claimed=args.claimed)
     _print(args, items, _tree_lines(items) or ["(no items)"])
     return 0
 
@@ -346,9 +345,9 @@ def cmd_status(ledger, args) -> int:
         lines.append(f"sources: {src_line}")
     lines.append(f"OVERDUE ({len(result['overdue'])})")
     lines += [f"  {_item_line(it)}" for it in result["overdue"]]
-    for label, key in (("IN FLIGHT", "inflight"), ("READY", "ready"), ("WAITING", "waiting")):
-        lines.append(f"{label} ({len(result[key])})")
-        for it in result[key]:
+    for section, items in result["sections"].items():
+        lines.append(f"{section.replace('_', ' ').upper()} ({len(items)})")
+        for it in items:
             lines.append(f"  {_item_line(it)}")
             for child in it.get("nested_children") or []:
                 lines.append(f"    {_item_line(child)}  ({child['status']})")
@@ -385,16 +384,18 @@ def _guide_lines(g: dict) -> list[str]:
     else:
         lines.append("  (none) - run `dori prefix add <name> --kind ref|link|both`")
 
+    lines += ["", "Statuses:"]
+    for s in g["statuses"]:
+        flags = [f"section={s['section']}"]
+        if s["terminal"]:
+            flags.append("terminal")
+        if s["stale_days"] is not None:
+            flags.append(f"stale_days={s['stale_days']}")
+        lines.append(f"  {s['name']:10} {', '.join(flags)}")
+    lines.append(f"  default_status: {g['default_status']}")
+    lines.append("  blocked   derived from open deps, never stored - shown as [blocked] in list/status")
+
     lines += [
-        "",
-        "Statuses:",
-        "  idea      captured, no commitment - graduate to ready before claiming",
-        "  ready     unclaimed, workable",
-        "  inflight  claimed and being worked",
-        "  waiting   waiting on something external",
-        "  done      finished",
-        "  parked    shelved, not currently pursued",
-        "  blocked   derived from open deps, never stored - shown as [blocked] in list/status",
         "",
         "Host vs actor:",
         f"  this machine's host id: {g['host_id']}",

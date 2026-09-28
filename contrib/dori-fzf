@@ -24,9 +24,9 @@ EDITOR_BIN="${EDITOR:-vi}"
 
 RELOAD_ALL="\"$D\" list"
 RELOAD_COLLAPSED="\"$D\" list | grep -v '^  '"
-RELOAD_INFLIGHT="\"$D\" list --status inflight | grep -v '^  '"
+RELOAD_CLAIMED="\"$D\" list --claimed | grep -v '^  '"
 
-HEADER=$'ctrl-n: new from query | ctrl-o: claim | ctrl-d: done | ctrl-e: edit | ctrl-l: log\nctrl-x: expand | ctrl-r: collapse | ctrl-i: inflight | ctrl-/: cycle preview'
+HEADER=$'ctrl-n: new from query | ctrl-o: claim | ctrl-d: done | ctrl-e: edit | ctrl-l: log\nctrl-x: expand | ctrl-r: collapse | ctrl-i: claimed | ctrl-/: cycle preview'
 
 # Plain execute plus `|| sleep 2` keeps a dori error on screen. execute-silent hid it.
 # fzf quotes {q} and {1} itself. Quoting them again embeds the quote characters.
@@ -48,7 +48,7 @@ EXEC_LOG="printf 'log for {r1}: '; read -r note; [ -n \"\$note\" ] && \"$D\" log
     --bind 'ctrl-/:change-preview-window(right,55%|hidden|down,50%)' \
     --bind "ctrl-x:reload($RELOAD_ALL)" \
     --bind "ctrl-r:reload($RELOAD_COLLAPSED)" \
-    --bind "ctrl-i:reload($RELOAD_INFLIGHT)" \
+    --bind "ctrl-i:reload($RELOAD_CLAIMED)" \
     --bind "ctrl-n:execute($EXEC_NEW)+reload($RELOAD_COLLAPSED)" \
     --bind "ctrl-o:execute($EXEC_CLAIM)+reload($RELOAD_COLLAPSED)" \
     --bind "ctrl-d:execute($EXEC_DONE)+reload($RELOAD_COLLAPSED)" \
