@@ -25,6 +25,9 @@ from typing import Optional
 
 import yaml
 
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_YAML_DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
+
 
 class DandoriError(Exception):
     pass
@@ -159,12 +162,12 @@ def load_config(data_dir: Path) -> dict:
     path = Path(data_dir) / "config.yaml"
     if not path.exists():
         return {}
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=_YAML_LOADER) or {}
 
 
 def save_config(data_dir: Path, config: dict) -> None:
     path = Path(data_dir) / "config.yaml"
-    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    path.write_text(yaml.dump(config, Dumper=_YAML_DUMPER, sort_keys=False), encoding="utf-8")
 
 
 def prefix_of(value: str) -> Optional[str]:
@@ -248,7 +251,7 @@ def set_description(body: str, description: str) -> str:
 
 def render_item_file(fm: dict, body: str) -> str:
     fm = canonical_frontmatter(fm)
-    yaml_text = yaml.safe_dump(fm, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    yaml_text = yaml.dump(fm, Dumper=_YAML_DUMPER, sort_keys=False, default_flow_style=False, allow_unicode=True)
     return f"---\n{yaml_text}---\n\n{body}"
 
 
@@ -256,7 +259,7 @@ def parse_item_file(path: Path) -> tuple[dict, str]:
     m = _FRONTMATTER_RE.match(path.read_text(encoding="utf-8"))
     if not m:
         raise DandoriError(f"malformed item file: {path}")
-    return yaml.safe_load(m.group(1)) or {}, m.group(2)
+    return yaml.load(m.group(1), Loader=_YAML_LOADER) or {}, m.group(2)
 
 
 def generate_id(items_dir: Path) -> str:
